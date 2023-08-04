@@ -3,6 +3,7 @@ package org.example.utils
 import net.sf.jsqlparser.parser.CCJSqlParserUtil
 import net.sf.jsqlparser.statement.Statement
 import net.sf.jsqlparser.statement.create.table.{ColumnDefinition, CreateTable}
+import org.apache.spark.sql.Column
 
 import java.io.{File, FilenameFilter, IOException}
 import java.util
@@ -32,6 +33,7 @@ object JSqlParserDdlParser {
     import sparkSession.implicits._
     val newDF = sparkSession.sparkContext.makeRDD(fileNamesNew)
       .toDF("new_col_name","new_col_type")
+      .selectExpr("replace(new_col_name,'`','') as new_col_name","new_col_type")
 
     // 获取历史表文件路径
     val filesHis: List[String] = listFiles(new File("input/his"))
@@ -45,14 +47,16 @@ object JSqlParserDdlParser {
       println("历史表字段数量：" + fileNamesHis.size)
 
       // 如果目标表字段数量大于历史表字段数量，则进行关联开始历史表字段补全
-      if(fileNamesNew.size > fileNamesHis.size){
+      if(fileNamesNew.size != fileNamesHis.size){
         // 2.构建历史表字段DataFrame
         val hisDF = sparkSession.sparkContext.makeRDD(fileNamesHis)
           .toDF("his_col_name","his_col_type")
+          .selectExpr("replace(his_col_name,'`','') as his_col_name","his_col_type")
         // 3.关联
-        val joinDF = newDF.join(hisDF, newDF("new_col_name") === hisDF("his_col_name") , "left")
+        val joinDF = newDF.join(hisDF, newDF("new_col_name") === hisDF("his_col_name") , "full")
         // 4.缺失字段
-        joinDF.filter("his_col_name is null").selectExpr("new_col_name as miss_col_name",
+        joinDF.filter("his_col_name is null or new_col_name is null").selectExpr(
+          "if(his_col_name is null,new_col_name,his_col_name) as miss_col_name",
           "if(his_col_name is null, lower(new_col_type), his_col_type) as miss_col_type")
           .selectExpr("miss_col_name","miss_col_type","if(miss_col_type in ('string','varchar'),'\\'\\'','null') as miss_col_value")
           .selectExpr("miss_col_name","miss_col_type",
